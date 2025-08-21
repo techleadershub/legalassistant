@@ -50,6 +50,47 @@ openai_api_key = "your-openai-api-key-here"
         st.error("Please check your API key and internet connection.")
         st.stop()
 
+def estimate_tokens(text: str) -> int:
+    """Rough estimation of tokens (1 token ≈ 4 characters for English)"""
+    return len(text) // 4
+
+def chunk_text(text: str, max_tokens: int = 12000) -> list:
+    """Split text into chunks that fit within token limits"""
+    max_chars = max_tokens * 4  # Rough conversion
+    chunks = []
+    
+    # Split by paragraphs first to maintain context
+    paragraphs = text.split('\n\n')
+    current_chunk = ""
+    
+    for paragraph in paragraphs:
+        # If adding this paragraph exceeds the limit, save current chunk
+        if len(current_chunk) + len(paragraph) > max_chars:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = paragraph
+            else:
+                # If a single paragraph is too large, split it by sentences
+                sentences = paragraph.split('. ')
+                for sentence in sentences:
+                    if len(current_chunk) + len(sentence) > max_chars:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                            current_chunk = sentence
+                        else:
+                            # If even a sentence is too long, truncate it
+                            chunks.append(sentence[:max_chars])
+                    else:
+                        current_chunk += sentence + ". "
+        else:
+            current_chunk += paragraph + "\n\n"
+    
+    # Add the last chunk
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
 def extract_text_from_pdf(pdf_file) -> str:
     """Extract text from uploaded PDF file"""
     try:
@@ -75,32 +116,106 @@ def extract_text_from_pdf(pdf_file) -> str:
 def get_legal_summary(client, document_text: str, model: str = "gpt-3.5-turbo") -> str:
     """Generate a legal summary of the document using OpenAI"""
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a legal assistant specializing in Indian law. Your task is to summarize legal documents in plain English for non-lawyers. Focus on:
-                    
-                    1. Key terms and conditions
-                    2. Rights and obligations of parties
-                    3. Important clauses (termination, payment, liability, etc.)
-                    4. Potential risks or concerns
-                    5. Next steps or deadlines
-                    
-                    Always reference Indian legal context where applicable. Keep the summary clear, concise, and accessible. Highlight any critical legal clauses like indemnity, arbitration, termination, confidentiality, etc.
-                    
-                    IMPORTANT: Always include a disclaimer that this is for informational purposes only and not legal advice."""
-                },
-                {
-                    "role": "user",
-                    "content": f"Please provide a plain-English summary of this legal document:\n\n{document_text}"
-                }
-            ],
-            max_tokens=1500,
-            temperature=0.3
-        )
-        return response.choices[0].message.content
+        # Check if document is too large
+        estimated_tokens = estimate_tokens(document_text)
+        
+        if estimated_tokens > 12000:  # Leave room for system prompt and response
+            st.warning(f"⚠️ Large document detected ({estimated_tokens:,} estimated tokens). Processing in chunks...")
+            
+            # Split into chunks
+            chunks = chunk_text(document_text, max_tokens=10000)
+            chunk_summaries = []
+            
+            # Process each chunk
+            for i, chunk in enumerate(chunks):
+                st.info(f"📄 Processing chunk {i+1} of {len(chunks)}...")
+                
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """You are a legal assistant specializing in Indian law. Summarize this section of a legal document focusing on:
+                            
+                            1. Key terms and conditions in this section
+                            2. Rights and obligations mentioned
+                            3. Important clauses (termination, payment, liability, etc.)
+                            4. Potential risks or concerns
+                            5. Critical dates or deadlines
+                            
+                            Keep it concise but comprehensive. This is part of a larger document."""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Summarize this section of a legal document:\n\n{chunk}"
+                        }
+                    ],
+                    max_tokens=800,
+                    temperature=0.3
+                )
+                chunk_summaries.append(response.choices[0].message.content)
+            
+            # Combine all chunk summaries into final summary
+            st.info("🔄 Combining all sections into final summary...")
+            combined_text = "\n\n".join([f"**Section {i+1}:**\n{summary}" for i, summary in enumerate(chunk_summaries)])
+            
+            final_response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a legal assistant specializing in Indian law. You have received summaries of different sections of a legal document. Your task is to create a comprehensive, cohesive summary that:
+                        
+                        1. Combines all sections into a unified overview
+                        2. Identifies the document type and parties involved
+                        3. Highlights key terms, conditions, and obligations
+                        4. Points out critical clauses and potential risks
+                        5. Notes important deadlines or next steps
+                        
+                        Provide a clear, accessible summary for non-lawyers while maintaining legal accuracy.
+                        
+                        IMPORTANT: Always end with a disclaimer that this is for informational purposes only and not legal advice."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Please create a comprehensive summary from these section summaries:\n\n{combined_text}"
+                    }
+                ],
+                max_tokens=1500,
+                temperature=0.3
+            )
+            
+            return final_response.choices[0].message.content
+            
+        else:
+            # Document is small enough to process normally
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a legal assistant specializing in Indian law. Your task is to summarize legal documents in plain English for non-lawyers. Focus on:
+                        
+                        1. Key terms and conditions
+                        2. Rights and obligations of parties
+                        3. Important clauses (termination, payment, liability, etc.)
+                        4. Potential risks or concerns
+                        5. Next steps or deadlines
+                        
+                        Always reference Indian legal context where applicable. Keep the summary clear, concise, and accessible. Highlight any critical legal clauses like indemnity, arbitration, termination, confidentiality, etc.
+                        
+                        IMPORTANT: Always include a disclaimer that this is for informational purposes only and not legal advice."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Please provide a plain-English summary of this legal document:\n\n{document_text}"
+                    }
+                ],
+                max_tokens=1500,
+                temperature=0.3
+            )
+            return response.choices[0].message.content
+            
     except Exception as e:
         return f"Error generating summary: {str(e)}"
 
