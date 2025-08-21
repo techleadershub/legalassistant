@@ -17,17 +17,38 @@ st.set_page_config(
 @st.cache_resource
 def init_openai_client():
     """Initialize OpenAI client with API key"""
-    # Check for API key in environment variable first, then in secrets
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
+    # Check for API key in environment variable first, then in secrets    
+ 
+    try:
         if "openai_api_key" not in st.secrets.get("general", {}):
-            st.error("Please add your OpenAI API key to .streamlit/secrets.toml")
+            st.error("⚠️ OpenAI API key not found. Please add your OpenAI API key to .streamlit/secrets.toml under [general] section.")
+            st.code("""
+[general]
+openai_api_key = "your-openai-api-key-here"
+            """)
             st.stop()
         
         api_key = st.secrets["general"]["openai_api_key"]
+    except Exception as e:
+        st.error(f"⚠️ Error accessing secrets: {str(e)}")
+        st.error("Please ensure your .streamlit/secrets.toml file is properly configured.")
+        st.stop()
 
-    return openai.OpenAI(api_key=api_key)
+    # Validate API key format
+    if not api_key or not api_key.strip():
+        st.error("⚠️ OpenAI API key is empty. Please provide a valid API key.")
+        st.stop()
+    
+    if not api_key.startswith('sk-'):
+        st.error("⚠️ Invalid OpenAI API key format. API keys should start with 'sk-'")
+        st.stop()
+    
+    try:
+        return openai.OpenAI(api_key=api_key.strip())
+    except Exception as e:
+        st.error(f"⚠️ Failed to initialize OpenAI client: {str(e)}")
+        st.error("Please check your API key and internet connection.")
+        st.stop()
 
 def extract_text_from_pdf(pdf_file) -> str:
     """Extract text from uploaded PDF file"""
