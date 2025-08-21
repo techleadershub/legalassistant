@@ -17,12 +17,16 @@ st.set_page_config(
 @st.cache_resource
 def init_openai_client():
     """Initialize OpenAI client with API key"""
-    api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
-
-    # st.write(api_key)
+    # Check for API key in environment variable first, then in secrets
+    api_key = os.getenv("OPENAI_API_KEY")
+    
     if not api_key:
-        st.error("⚠️ OpenAI API key not found. Please set OPENAI_API_KEY environment variable or add it to Streamlit secrets.")
-        st.stop()
+        if "openai_api_key" not in st.secrets.get("general", {}):
+            st.error("Please add your OpenAI API key to .streamlit/secrets.toml")
+            st.stop()
+        
+        api_key = st.secrets["general"]["openai_api_key"]
+
     return openai.OpenAI(api_key=api_key)
 
 def extract_text_from_pdf(pdf_file) -> str:
